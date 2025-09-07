@@ -1,0 +1,58 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 每天凌晨 3 点自动运行
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 允许推送代码
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get upstream repo info
+        id: upstream
+        run: |
+          repo=${GITHUB_REPOSITORY}
+          api="https://api.github.com/repos/$repo"
+          echo "Fetching parent info from $api"
+
+          parent=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" $api | jq -r '.parent.full_name')
+          if [ "$parent" == "null" ] || [ -z "$parent" ]; then
+            echo "This repo is not a fork, nothing to sync."
+            exit 0
+          fi
+          echo "Detected upstream: $parent"
+          echo "parent=$parent" >> $GITHUB_OUTPUT
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/${{ steps.upstream.outputs.parent }}.git
+          git fetch upstream
+
+      - name: Sync with upstream
+        run: |
+          # 兼容 main 或 master 分支
+          branch=$(git symbolic-ref --short HEAD)
+          echo "Current branch: $branch"
+
+          if git show-ref --quiet refs/remotes/upstream/main; then
+            upstream_branch=main
+          else
+            upstream_branch=master
+          fi
+
+          echo "Syncing from upstream/$upstream_branch"
+          git merge upstream/$upstream_branch --allow-unrelated-histories || true
+          git push origin $branch
